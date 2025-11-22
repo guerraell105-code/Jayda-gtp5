@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jayda GPT v3</title>
+<style>
+body { font-family: Arial, sans-serif; padding: 15px; background: #f9f9f9; }
+h1,h2 { color: #333; }
+select, input, button, textarea { margin: 5px 0; padding: 8px; font-size: 16px; }
+#scriptBox { background:#fff; padding:15px; margin-top:10px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.1); }
+.prob { font-weight:bold; color:#555; margin-top:5px; }
+.notes { font-size:14px; color:#666; margin-top:5px; }
+.feedback button, .copyButton { margin-right:8px; padding:6px 12px; font-weight:bold; }
+.heatmap { margin-top:20px; }
+.stageColors { height:15px; width:15px; display:inline-block; margin-right:5px; border-radius:3px; }
+.panic-mode { margin-top:20px; padding:10px; background:#ffdddd; border-radius:5px; }
+</style>
+</head>
+<body>
+
+<h1>Jayda GPT v3</h1>
+
+<!-- Stage + Scenario -->
+<label for="stage">Stage / Intensity:</label>
+<select id="stage">
+  <option value="preMeltdown">Pre-Meltdown</option>
+  <option value="fullMeltdown">Full Meltdown</option>
+  <option value="grounding">Grounding</option>
+  <option value="postCalm">Post-Calm</option>
+  <option value="emergency">Emergency</option>
+</select>
+<br>
+
+<label for="scenario">Scenario:</label>
+<select id="scenario"></select>
+<br>
+
+<!-- Emotion decoder -->
+<label for="emotionInput">Input her message (optional for decoding):</label>
+<textarea id="emotionInput" rows="2" placeholder="Paste what she said..."></textarea>
+<button id="btnDecode">Decode Emotion & Suggest Script</button>
+<br>
+
+<!-- Scripts -->
+<button id="btnPrimary">Primary Script</button>
+<button id="btnPlanB">Plan B</button>
+<button id="btnPlanC">Plan C</button>
+<button id="btnCopy" class="copyButton">Copy Script</button>
+
+<div id="scriptBox">
+<p id="scriptText">Select a stage/scenario or decode a message to see a script.</p>
+<p class="prob" id="probText"></p>
+<p class="notes" id="notesText"></p>
+</div>
+
+<!-- Feedback -->
+<div class="feedback">
+<p>Mark script effectiveness:</p>
+<button id="btnWorked">✅ Worked</button>
+<button id="btnFailed">❌ Didn't work</button>
+</div>
+
+<!-- Panic Mode -->
+<div class="panic-mode">
+<h2>Panic / Emergency Mode</h2>
+<button id="btnPanicMeltdown">Meltdown Panic</button>
+<button id="btnPanicEmergency">Emergency Panic</button>
+</div>
+
+<!-- Heatmap -->
+<div class="heatmap">
+<h2>Emotional Heatmap</h2>
+<p>Time of day and triggers visualization:</p>
+<div id="heatmapDisplay"></div>
+</div>
+
+<script>
+// ---------- Data ----------
+const jaydaScripts = {
+preMeltdown: {
+needsSpace: {
+primary: {text:"Jayda, take all the space you need — I love you and I’m not going anywhere.", success:0.85, notes:"Calm, validating, no pressure."},
+planB: {text:"I know space might feel like I’m leaving, but I’m right here and I care deeply.", success:0.6, notes:"Gentle reassurance."},
+planC: {text:"I’ll stay in whatever way helps you feel safe. You’re not alone.", success:0.4, notes:"Extra grounding."}
+},
+frustrated: {
+primary:{text:"I get that you’re frustrated. I see you and I’m here for you.",success:0.75,notes:"Acknowledgment, calm."},
+planB:{text:"Your frustration is valid. I love you and I’m here.",success:0.55,notes:"Reassurance."},
+planC:{text:"Even when things feel tough, I’ve got your back. You’re not alone.",success:0.4,notes:"Supportive presence."}
+}
+},
+fullMeltdown: {
+hopelessness:{primary:{text:"Jayda… I hate seeing you feel trapped. I love you and I’m staying here.",success:0.75,notes:"Validation, love."}, planB:{text:"It’s okay to feel everything. I might not fully understand, but I see you.",success:0.55,notes:"Reinforce care."}, planC:{text:"Life feels unbearable, but I’m here and can help you get support if you want.",success:0.4,notes:"Introduce professional support gently."}},
+misdirectedAnger:{primary:{text:"I get that you’re angry, it’s okay. I love you and I’m not going anywhere.",success:0.75,notes:"Absorb without escalating."},planB:{text:"I know you’re upset, I care too much to leave you alone.",success:0.55,notes:"Stay grounded."},planC:{text:"Even when you lash out, I see the incredible person under the frustration.",success:0.4,notes:"Reinforce worth."}}
+},
+grounding:{
+affirmation:{primary:{text:"Jayda, you are incredible. I see everything you do and I love you so much. I’m here.",success:0.85,notes:"Heartfelt, grounding."},planB:{text:"You’re amazing, and I’m so proud of you. I love you fully.",success:0.6,notes:"Ego reinforcement."},planC:{text:"Everything you’ve done is impressive, and you’re loved for it.",success:0.5,notes:"Extra ego tie-in."}}
+}
+};
+
+// ---------- Feedback ----------
+let feedbackData=JSON.parse(localStorage.getItem('feedbackData'))||[];
+let heatmapData=JSON.parse(localStorage.getItem('heatmapData'))||[];
+
+// ---------- Elements ----------
+const stageSelect=document.getElementById('stage');
+const scenarioSelect=document.getElementById('scenario');
+const scriptText=document.getElementById('scriptText');
+const probText=document.getElementById('probText');
+const notesText=document.getElementById('notesText');
+const emotionInput=document.getElementById('emotionInput');
+const heatmapDisplay=document.getElementById('heatmapDisplay');
+
+// ---------- Populate Scenarios ----------
+function populateScenarios(){
+  scenarioSelect.innerHTML='';
+  const stage=stageSelect.value;
+  const scenarios=Object.keys(jaydaScripts[stage]);
+  scenarios.forEach(s=>{
+    const option=document.createElement('option');
+    option.value=s;
+    option.text=s;
+    scenarioSelect.appendChild(option);
+  });
+  showScript('primary');
+}
+
+// ---------- Show Script ----------
+function showScript(plan='primary'){
+  const stage=stageSelect.value;
+  const scenario=scenarioSelect.value;
+  const scriptObj=jaydaScripts[stage][scenario][plan];
+  if(scriptObj){
+    scriptText.innerText=scriptObj.text;
+    const key=stage+'_'+scenario+'_'+plan;
+    let adjustedProb=scriptObj.success;
+    const feedback=feedbackData.find(f=>f.key===key);
+    if(feedback) adjustedProb=feedback.avg;
+    probText.innerText=`Probability of Success: ${Math.round(adjustedProb*100)}%`;
+    notesText.innerText=`Notes: ${scriptObj.notes}`;
+    // update heatmap
+    heatmapData.push({time: new Date().getHours(),stage:stage,scenario:scenario});
+    localStorage.setItem('heatmapData',JSON.stringify(heatmapData));
+    renderHeatmap();
+  }
+}
+
+// ---------- Copy Script ----------
+function copyScript(){ navigator.clipboard.writeText(scriptText.innerText).then(()=>{alert('Script copied!');}); }
+
+// ---------- Feedback ----------
+function giveFeedback(success){
+  const stage=stageSelect.value;
+  const scenario=scenarioSelect.value;
+  const plans=['primary','planB','planC'];
+  let currentPlan=plans.find(plan=>scriptText.innerText===jaydaScripts[stage][scenario][plan]?.text)||'primary';
+  const key=stage+'_'+scenario+'_'+currentPlan;
+  let fb=feedbackData.find(f=>f.key===key);
+  if(!fb){ fb={key:key,total:0,count:0,avg:jaydaScripts[stage][scenario][currentPlan].success}; feedbackData.push(fb);}
+  fb.total+=success?1:0; fb.count+=1; fb.avg=fb.total/fb.count;
+  localStorage.setItem('feedbackData',JSON.stringify(feedbackData));
+  alert('Feedback recorded!');
+}
+
+// ---------- Panic Mode ----------
+function panicMode(stageName){
+  let stage,scenario;
+  if(stageName==='fullMeltdown'){stage='fullMeltdown';scenario='hopelessness';}
+  else if(stageName==='emergency'){stage='emergency';scenario='selfHarmRisk';}
+  else return;
+  const plans=['primary','planB','planC'];
+  let bestPlan=plans[0]; let maxProb=0;
+  plans.forEach(plan=>{
+    let prob=jaydaScripts[stage][scenario][plan].success;
+    const fb=feedbackData.find(f=>f.key===stage+'_'+scenario+'_'+plan); if(fb) prob=fb.avg;
+    if(prob>maxProb){maxProb=prob;bestPlan=plan;}
+  });
+  stageSelect.value=stage; populateScenarios(); scenarioSelect.value=scenario;
+  showScript(bestPlan); alert(`Panic Mode: ${scenario} (${bestPlan.toUpperCase()})\nProbability: ${Math.round(maxProb*100)}%`);
+}
+
+// ---------- Emotion Decoder ----------
+function decodeEmotion(){
+  const msg=emotionInput.value.toLowerCase();
+  let suggestedStage='preMeltdown';
+  let suggestedScenario='needsSpace';
+  if(msg.includes('angry') || msg.includes('mad') || msg.includes('frustrated')){suggestedStage='fullMeltdown'; suggestedScenario='misdirectedAnger';}
+  else if(msg.includes('hopeless') || msg.includes('miserable') || msg.includes('stuck')){suggestedStage='fullMeltdown'; suggestedScenario='hopelessness';}
+  else if(msg.includes('tired') || msg.includes('overwhelmed')){suggestedStage='preMeltdown'; suggestedScenario='frustrated';}
+  stageSelect.value=suggestedStage; populateScenarios(); scenarioSelect.value=suggestedScenario;
+  showScript('primary');
+}
+
+// ---------- Heatmap Render ----------
+function renderHeatmap(){
+  heatmapDisplay.innerHTML='';
+  const counts={};
+  heatmapData.forEach(entry=>{
+    const key=entry.time+'_'+entry.stage; counts[key]=(counts[key]||0)+1;
+  });
+  for(let h=0;h<24;h++){
+    const colorLevels=['#eee','#aaf','#55f','#002','#f55'];
+    const stages=['preMeltdown','fullMeltdown','grounding','postCalm','emergency'];
+    stages.forEach(stage=>{
+      const key=h+'_'+stage; const count=counts[key]||0;
+      const div=document.createElement('div');
+      div.className='stageColors'; div.style.background=colorLevels[Math.min(count,colorLevels.length-1)];
+      div.title=`Hour ${h}: ${stage}, occurrences: ${count}`;
+      heatmapDisplay.appendChild(div);
+    });
+    heatmapDisplay.appendChild(document.createElement('br'));
+  }
+}
+
+// ---------- Init ----------
+document.addEventListener('DOMContentLoaded',()=>{
+  populateScenarios();
+  stageSelect.addEventListener('change',populateScenarios);
+  document.getElementById('btnPrimary').addEventListener('click',()=>showScript('primary'));
+  document.getElementById('btnPlanB').addEventListener('click',()=>showScript('planB'));
+  document.getElementById('btnPlanC').addEventListener('click',()=>showScript('planC'));
+  document.getElementById('btnCopy').addEventListener('click',copyScript);
+  document.getElementById('btnWorked').addEventListener('click',()=>giveFeedback(true));
+  document.getElementById('btnFailed').addEventListener('click',()=>giveFeedback(false));
+  document.getElementById('btnPanicMeltdown').addEventListener('click',()=>panicMode('fullMeltdown'));
+  document.getElementById('btnPanicEmergency').addEventListener('click',()=>panicMode('emergency'));
+  document.getElementById('btnDecode').addEventListener('click',decodeEmotion);
+});
+</script>
+</body>
+</html>
